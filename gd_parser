@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+
+'''
+Parser functions.
+
+'''
+from sys import path
+path.append("../../")
+
+from datetime import datetime as dt
+from package.classes.gd_disk import Disk_ddr, Disk_ddve
+from package.classes.gd_stripe import Stripe_ddr, Stripe_ddve
+import package.modules.gd_helpers as h
+import threading
+
+def parse_disks(file):
+    ''' Expectes Autosupport file location as parameter.
+        Parses the file and creates a Disk object for each disk
+        that is part of an ACTIVE_TIER disk group.
+        Stores the Disk objects the h.DISKS list.
+    '''
+    try:
+        stream = h.open_file_stream(file)
+        line = stream.readline()
+        while line != "":
+            if "GENERATED_ON" in line:
+                asup_date = h.get_asup_date(line.strip())
+                if asup_date > h.MOST_RECENT_ASUP:
+                    h.MOST_RECENT_ASUP = asup_date
+            if "MODEL_NO" in line:
+                h.MODEL = line.split("=")[1].strip()
+                h.check_model(h.MODEL)
+            if "DD_RAID Histogram" in line:
+                dg_index = 0
+                dg = line.split()[3]
+                while "Pool UUID" not in line: line = stream.readline()
+                tier = line.split()[3].split(":")[1]
+            if "Array" in line and "active" in line:
+                tokens = h.tokenizer(line)
+                if tokens[1][:5] == "ppart":
+                    ppart = tokens[1]
+                    a_id = tokens[9]
+                    while "Dev" not in line: line = stream.readline()
+                    while line != "\n":
+                        if "READ" in line and tier == h.ACTIVE_TIER:
+                            dm = line.split()[0].split("p")[0]
+                            if h.DDVE:
+ #                               print("DEBUG: ", dg_index, asup_date, dg, dm, ppart, a_id)
+                                h.DISKS.append(Disk_ddve(dg_index, asup_date, dg,
+                                                         dm, ppart, a_id))
+                            else:
+                                h.DISKS.append(Disk_ddr(dg_index, asup_date, dg, dm))
+                            dg_index += 1
+                        line = stream.readline()
+            line = stream.readline()
+        stream.close()
+    except Exception as e:
+        h.screen_logger.exception(f"FAILED IN parse_disks():: {line} {e}")
+
+def parse_ddve_stripes(file):
+    ''' Expects a kern.info file location as a parameter.
+        Parses the kern.info for inflight stripes specific to DDVE.
+        If inflight stripe is found then pass the stripe request to 
+        add_ddve_stripe() for processing and adding to stripe dictionary.
+    '''
+    try:
+        file_year = h.get_file_year(file)
+        stream = h.open_file_stream(file)
+        line = stream.readline()
+        reqs = []
+        while line != '':
+            if "Detected an inflight stripe" in line:
+                tokens = h.tokenizer(line)
+                reqs.append(tokens[8].split()[1])
+            line = stream.readline()
+        stream.close()
+        for req in reqs:
+            add_this_stripe = threading.Thread(target=add_ddve_stripe, args=(req, h.open_file_stream(file), file_year))
+            add_this_stripe.start()
+            add_this_stripe.join()
+    except Exception as e:
+        h.screen_logger.exception(f"FAILED IN parse_ddve_stripes():: {line} {e}")
+
+def add_ddve_stripe(req, stream, file_year):
+    ''' Expects a stripe request number kern.info file location as a parameter.
+        This function is used for multithreading the stripe checks as kern.info
+        can be written out of order.
+        Creates a Stripe object for the stripe related to the request number.
+        Stores the Stripe objects in the h.STRIPES list.
+    '''
+    line = stream.readline()
+    running = True
+    while running:
+        if req in line:
+            completed = False
+            tokens = h.tokenizer(line)
+            date_split = tokens[0].split()
+            my_date_string = f"{date_split[0]} {date_split[1]} {file_year} {date_split[2]}"
+            my_datetime = dt.strptime(my_date_string, '%b %d %Y %H:%M:%S')
+            stripe = tokens[3].split()[2]
+            if stripe == "0": 
+                h.logging.debug(f"Skipping [stripe = 0] at "
+                                f"{my_datetime.strftime('%b %d %H:%M:%S')}")
+                h.DDVE_STRIPE_ZERO_COUNT += 1
+                running = False
+            else:
+                hdr_splt = tokens[4].split()
+                good, bad = hdr_splt[3].split("/")			
+                missing = tokens[5].split()[2]
+                op = tokens[6].split()[2]
+                tp = tokens[7].split()[2]
+                req = tokens[8].split()[1]
+                while "Disk States" not in line: line = stream.readline()
+                su_errors = []
+                dm = ""
+                line = line.replace("[]", "[no_err]")
+                line = line.split("Disk States:")[1]
+                tokens = h.tokenizer("".join(line).rstrip())
+                for x in range(len(tokens)):
+                    if tokens[x] == "no_err":
+                        su_errors.append("no_err")
+                    elif tokens[x] in h.STRIPE_UNIT_ERRORS.keys():
+                        su_errors.append(tokens[x])
+                    elif tokens[x][:3] == "dm-" and dm == "":
+                        dm = tokens[x].split("p")[0]
+                while req not in line: line = stream.readline()
+                tokens = h.tokenizer(line)
+                dg, ppart = tokens[3].split("/")
+                if "Completed" in line:
+                    completed = True
+                    offset = None
+                    running = False
+                else:
+                    while "offset" not in line: line = stream.readline()
+                    tokens = h.tokenizer(line)
+                    t_split = tokens[2].split("offset=")
+                    offset = t_split[1].split(",")[0]
+                    running = False
+                new_entry = Stripe_ddve(my_datetime, stripe, good, bad, missing, op, 
+                                        tp, req, su_errors, dm, offset, dg, ppart, completed)
+                h.logging.debug(f"Adding DDVE stripe {new_entry.stripe}, request "
+                                f"{new_entry.req}, date: {my_datetime.strftime('%b %d %H:%M:%S')}"
+                                f"Completed: {new_entry.completed}")
+                h.STRIPES.append(new_entry)
+        line = stream.readline()
+    stream.close()
+
+def parse_ddr_stripes(file):
+    ''' Expects a kern.info file location as a parameter.
+        Parses the kern.info for inflight stripes specific to normal DDR RAID.
+        Creates a Stripe object for every inflight stripe found.
+        Stores the Stripe objects in the h.STRIPES list.
+    '''
+    pass
+    # try:
+    #     stream = h.open_file_stream(file)
+    #     line = stream.readline()
+    #     while line != '':
+    #         if "Detected an inflight stripe" in line:
+    #             tokens = h.tokenizer(line)
+    #             date_split = tokens[0].split()
+    #             my_date_string = f"{date_split[0]} {date_split[1]} 2023 {date_split[2]}"
+    #             my_datetime = dt.strptime(my_date_string, '%b %d %Y %H:%M:%S')
+    #             stripe = tokens[3].split()[2]
+    #             hdr_splt = tokens[4].split()
+    #             good, bad = hdr_splt[3].split("/")			
+    #             missing = tokens[5].split()[2]
+    #             op = tokens[6].split()[2]
+    #             tp = tokens[7].split()[2]
+    #             req = tokens[8].split()[1]
+    #             x = threading.Thread(check_stripe, (req, file,))
+    #             x.start()
+    #             print("STARTED")
+    #             line = stream.readline()
+    #             while "Disk States" not in line: line = stream.readline()
+    #             dm_errors = []
+    #             line = line.replace("[ ]", "[no_err]")
+    #             line = line.split("Disk States:")[1]
+    #             tokens = h.tokenizer("".join(line).rstrip())
+    #             for x in range(len(tokens)):
+    #                 if tokens[x] == "no_err":
+    #                     dm_errors.append("no_err")
+    #                 elif tokens[x] in h.STRIPE_UNIT_ERRORS.keys():						
+    #                     dm_errors.append(tokens[x])
+    #             line = stream.readline()
+    #             l_stripe = str(int(stripe) - 1)
+    #             while l_stripe not in line: line = stream.readline()
+    #             if "Retrying" in line:
+    #                 h.logging.debug(f"Skipping retry on logical stripe {l_stripe}"
+    #                                 f" physical stripe {stripe} at "
+    #                                 f"{my_datetime.strftime('%b %d %H:%M:%S')}")
+    #             else:
+    #                 part = ""
+    #                 tokens = h.tokenizer(line)
+    #                 if req == tokens[8].split("= ")[1]:
+    #                     dg, part = tokens[3].split("/")
+    #                 if part == "ppart":
+    #                     new_entry = Stripe_ddr(my_datetime, stripe, good, bad, missing, op, 
+    #                                            tp, req, dm_errors, dg)
+    #                     h.logging.debug(f"Adding DDR physical stripe {new_entry.stripe}"
+    #                                     f", request {new_entry.req}, "
+    #                                     f" date: {my_datetime.strftime('%b %d %H:%M:%S')}")
+    #                     h.STRIPES.append(new_entry)
+    #         line = stream.readline()
+    #     stream.close()
+    # except Exception as e:
+    #     h.screen_logger.exception(f"FAILED IN parse_ddr_stripes:: {e}")
+        
+
+if __name__ == "__main__":
+    print("This is the parsing module.")
