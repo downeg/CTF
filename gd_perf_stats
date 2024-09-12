@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+
+'''
+Performance Stats class
+
+'''
+
+from datetime import datetime as dt
+
+class Disk_stat:
+    def __init__(self, datetime, disk, r_kbps, r_iops, 
+                 r_resp, r_ops_gs, w_kbps, w_iops,
+                 w_resp, w_ops_gs, rw_mbps, rw_ipos,
+                 rw_resp, rw_random, rw_busy):
+        self.__datetime = datetime
+        self.__disk = disk
+        self.__r_kbps = r_kbps
+        self.__r_iops = r_iops
+        self.__r_resp = r_resp
+        self.__r_ops_gs = r_ops_gs
+        self.__w_kbps = w_kbps
+        self.__w_iops = w_iops
+        self.__w_resp = w_resp
+        self.__w_ops_gs = w_ops_gs
+        self.__rw_mbps = rw_mbps
+        self.__rw_ipos = rw_ipos
+        self.__rw_resp = rw_resp
+        self.__rw_random = rw_random
+        self.__rw_busy = rw_busy
+
+    @property
+    def datetime(self):
+        return self.__datetime
+    
+    @property
+    def disk(self):
+        return self.__disk
+
+    @property
+    def r_kbps(self):
+        return self.__r_kbps
+
+    @property
+    def r_iops(self):
+        return self.__r_iops
+
+    @property
+    def r_resp(self):
+        return self.__r_resp
+    
+    @property
+    def r_ops_gs(self):
+        return self.__r_ops_gs
+    
+    @property
+    def w_kbps(self):
+        return self.__w_kbps
+
+    @property
+    def w_iops(self):
+        return self.__w_iops
+
+    @property
+    def w_resp(self):
+        return self.__w_resp
+
+    @property
+    def w_ops_gs(self):
+        return self.__w_ops_gs
+
+    @property
+    def rw_mbps(self):
+        return self.__rw_mbps
+    
+    @property
+    def rw_ipos(self):
+        return self.__rw_ipos
+    
+    @property
+    def rw_resp(self):
+        return self.__rw_resp
+
+    @property
+    def rw_random(self):
+        return self.__rw_random
+
+    @property
+    def rw_busy(self):
+        return self.__rw_busy
