@@ -1,0 +1,27 @@
+import package.modules.gd_helpers as h
+
+disks = {}
+#This is going to be the chart performance project for disks.
+
+#file = input("Enter the path to the ASUP: ")
+limit = float(input("Enter the max response time (ms) : "))
+file = "/auto/cores/c174294810/bundle_rhdd1-ddboost_2023-08-21_09-31-30/ddr/var/support/autosupport"
+with open(file, "rt") as stream:
+    line = stream.readline()
+    while "Disk Show Performance" not in line:
+        if "GENERATED_ON" in line:
+            asup_date = h.get_asup_date(line.strip())
+            if asup_date > h.MOST_RECENT_ASUP:
+                h.MOST_RECENT_ASUP = asup_date
+        line = stream.readline()
+    line = stream.readlines(2)
+    while "----------" not in line: line = stream.readline()
+    line = stream.readline()
+    while "----------" not in line:
+        tokens = line.split()
+        disks[tokens[0]] = [asup_date, tokens[1:]]
+        line = stream.readline()
+
+for disk in disks.keys():
+    if float(disks[disk][1][2]) > limit:
+        print(f"{disks[disk][0].strftime('%b %d')} {disk} {disks[disk][1][12]}")
