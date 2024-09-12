@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+
+'''
+Main program
+
+''' 
+from sys import path
+path.append(".")
+
+from os import getlogin
+from os import path as pt
+# from time import sleep
+import package.modules.gd_helpers as h
+import package.modules.gd_parser as p
+import package.modules.gd_report as r
+
+resync = False
+full_report = False
+dd_raidtool = False
+save_to_file = False
+
+r.print_banner()
+
+if input(f"{h.GREEN}Enable DEBUG logging? y/n [n] : "
+         f"{h.RESET}") == 'y':
+    h.LOG_LEVEL = "DEBUG"
+h.setup_logging()
+
+if str(input(f"{h.GREEN}Would you like to disable the text colour?"
+             f" y/n [n] : {h.RESET}")) == 'y':
+	h.GREEN = h.RESET
+	h.RED = h.RESET
+	h.BLUE = h.RESET
+	h.YELLOW = h.RESET
+
+root_dir = ""
+root_dir = input(f"{h.GREEN}Enter path (e.g. /auto/cores/c.../ddr/var/)"
+                 f" : {h.RESET}")
+h.logging.info("RUN by " + getlogin() + " on " + root_dir)
+while root_dir == "":
+	root_dir = input(f"{h.GREEN}Enter path (e.g. /auto/cores/c.../ddr/var/)"
+		             f" : {h.RESET}")
+if root_dir[-3:] == "var": root_dir += "/"
+if root_dir[-4:] != "var/":
+    h.logging.critical(f"Invalid path: {root_dir}")
+    h.screen_logger.critical(f"{h.RED}Invalid path: {root_dir}{h.RESET}")
+    h.logging.critical(f"QUIT")
+    exit()
+
+if str(input(f"{h.GREEN}Set custom date/time range? y/n [n] : "
+             f"{h.RESET}")) == 'y':
+    h.change_datetime()
+
+print(f"{h.GREEN}Parsing logs...{h.RESET}")
+print(f"{h.GREEN}Please wait while parsing completes. This can take up to 2 minutes for 100s of stripes.{h.RESET}")
+
+p.parse_disks(root_dir + "support/autosupport")
+for x in range(1,14):
+    asup_file = f"{root_dir}support/autosupport.{x}"
+    if pt.isfile(asup_file):
+        p.parse_disks(asup_file)
+file = root_dir + "log/debug/platform/kern.info"
+if h.DDVE:  p.parse_ddve_stripes(file)
+else: p.parse_ddr_stripes(file)
+#TODO: Add support for gzipped files.
+
+r.print_model_info()
+
+
+if str(input(f"{h.GREEN}Show the full inflight stripe "
+             f"report? y/n [n] : {h.RESET}")) == 'y':
+    full_report = True
+if str(input(f"{h.GREEN}Show the dd_raidtool commands instead of dd_raid_rescue? "
+             f"y/n [n] : {h.RESET}")) == 'y':
+    dd_raidtool = True
+if str(input(f"{h.GREEN}Show the commands to resync/zero the "
+             f"stripes? y/n [n] : {h.RESET}")) == 'y':
+    resync = True
+if str(input(f"{h.GREEN}Save the stripe list to "
+             f"a file? y/n [n] : {h.RESET}")) == 'y':
+    save_to_file = True
+
+r.print_line()
+r.print_completed_stripes()
+if h.DDVE:
+    r.print_zero_count()
+    if full_report: r.print_inflight_stripe_report()
+    if dd_raidtool: r.ddve_raidtool_commands(resync)
+    if not dd_raidtool: r.ddve_raid_rescue_commands(resync)
+else:
+    print("Non DDVE is not supported yet.")
+    print("CURRENT CODE SHOULD NEVER GET TO THIS LINE.")
+
+r.print_ddfs_verify()
+r.print_line()
+
+if save_to_file: h.save_inflight_stripes()
+h.logging.info("Execution completed successfully.")
